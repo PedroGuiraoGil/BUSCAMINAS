@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Buscaminas 3D - Aventura</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #111827; /* gray-900 */
+        }
+        #info-container {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            color: white;
+            text-align: center;
+        }
+        #controls-info {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: #9ca3af; /* gray-400 */
+            font-size: 0.9rem;
+            pointer-events: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        canvas {
+            display: block;
+        }
+        .modal {
+            transition: opacity 0.25s ease;
+        }
+        .modal-content {
+            transform: translateY(-20px);
+            transition: transform 0.25s ease;
+        }
+        .modal.opacity-100 .modal-content {
+            transform: translateY(0);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <!-- Contenedor para la escena 3D -->
+    <div id="canvas-container"></div>
+
+    <!-- UI del Juego -->
+    <div id="info-container" class="bg-gray-800 bg-opacity-80 p-4 rounded-lg shadow-lg w-full max-w-lg flex justify-between items-center">
+        <div>
+            <h1 class="text-xl font-bold text-cyan-400">Buscaminas 3D</h1>
+            <p id="level-title" class="text-gray-300">Nivel 1</p>
+        </div>
+        <div class="flex items-center space-x-4">
+            <button id="prev-level-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold p-2 rounded-lg leading-none disabled:opacity-50 disabled:cursor-not-allowed" title="Nivel Anterior">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div class="text-center">
+                 <p id="objective" class="text-lg font-semibold">Objetivo: Despeja el campo</p>
+                 <p id="flags-left" class="text-gray-300">� 0</p>
+            </div>
+            <button id="next-level-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold p-2 rounded-lg leading-none" title="Nivel Siguiente">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Info de Controles -->
+    <div id="controls-info">
+        <p><b>Girar:</b> Arrastrar | <b>Zoom:</b> Rueda/Pellizcar</p>
+        <p><b>Revelar:</b> Clic Izquierdo / Toque Rápido | <b>Marcar:</b> Clic Derecho / Mantener Pulsado</p>
+    </div>
+
+    <!-- Modal para mensajes -->
+    <div id="modal" class="modal fixed inset-0 bg-black bg-opacity-75 flex items-start justify-center pt-16 p-4 opacity-0 pointer-events-none">
+        <div class="modal-content bg-gray-800 rounded-lg shadow-2xl p-8 max-w-sm w-full text-center">
+            <h2 id="modal-title" class="text-2xl font-bold mb-4">¡Nivel Superado!</h2>
+            <p id="modal-message" class="mb-6">¡Has despejado el campo con éxito!</p>
+            <button id="modal-button" class="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-6 rounded-lg transition-colors" style="pointer-events: auto;">
+                Siguiente Nivel
+            </button>
+        </div>
+    </div>
+
+    <!-- Librerías de Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // --- CONFIGURACIÓN DE NIVELES ---
+        const LONG_PRESS_DURATION = 500; // ms
+        const DRAG_THRESHOLD = 5; // píxeles
+        const CUBE_SPACING = 0.1;
+
+        // --- VARIABLES GLOBALES DE THREE.JS ---
+        let scene, camera, renderer, controls;
+        let raycaster, pointer;
+
+        // --- VARIABLES GLOBALES DEL JUEGO ---
+        let currentLevelIndex = 0;
+        let boardDimensions, mineCount;
+        let boardData = [];
+        let cubeMeshes = [];
+        let flagsLeft;
+        let gameOver = false;
+        let firstClick = true;
+        
+        const interactionState = {
+            pointerDown: false,
+            isDragging: false,
+            longPressTimer: null,
+            downPosition: new THREE.Vector2(),
+        };
+
+        // --- ELEMENTOS DEL DOM ---
+        const canvasContainer = document.getElementById('canvas-container');
+        const levelTitleElement = document.getElementById('level-title');
+        const flagsLeftElement = document.getElementById('flags-left');
+        const modal = document.getElementById('modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const modalButton = document.getElementById('modal-button');
+        const prevLevelBtn = document.getElementById('prev-level-btn');
+        const nextLevelBtn = document.getElementById('next-level-btn');
+
+        // --- MATERIALES Y GEOMETRÍAS ---
+        const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const materials = {
+            hidden: new THREE.MeshLambertMaterial({ color: 0x374151 }),
+            revealed: new THREE.MeshLambertMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.2 }),
+            flagged: new THREE.MeshLambertMaterial({ color: 0xfbbf24 }),
+            mine: new THREE.MeshLambertMaterial({ color: 0xef4444 })
+        };
+        const numberTextures = {};
+
+        // --- INICIALIZACIÓN ---
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111827);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            canvasContainer.appendChild(renderer.domElement);
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+            raycaster = new THREE.Raycaster();
+            pointer = new THREE.Vector2();
+
+            renderer.domElement.addEventListener('pointerdown', onPointerDown, false);
+            renderer.domElement.addEventListener('pointermove', onPointerMove, false);
+            renderer.domElement.addEventListener('pointerup', onPointerUp, false);
+            renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+            window.addEventListener('resize', onWindowResize, false);
+            
+            prevLevelBtn.addEventListener('click', () => {
+                if (currentLevelIndex > 0) {
+                    currentLevelIndex--;
+                    startGame(currentLevelIndex);
+                }
+            });
+
+            nextLevelBtn.addEventListener('click', () => {
+                currentLevelIndex++;
+                startGame(currentLevelIndex);
+            });
+
+            startGame(currentLevelIndex);
+            animate();
+        }
+
+        function startGame(levelIndex) {
+            const sizeIncrease = Math.floor(levelIndex / 2);
+            let baseSize = 4 + sizeIncrease;
+            boardDimensions = { x: baseSize, y: baseSize, z: baseSize };
+
+            // CAMBIO: A partir del nivel 6 (índice 5), las formas dejan de ser cúbicas
+            if (levelIndex >= 5) {
+                const modifier = (levelIndex - 5) % 3;
+                if (modifier === 0) boardDimensions.x += 2;
+                else if (modifier === 1) boardDimensions.y += 2;
+                else boardDimensions.z += 2;
+            }
+
+            const density = 0.10 + (levelIndex * 0.0075);
+            const volume = boardDimensions.x * boardDimensions.y * boardDimensions.z;
+            mineCount = Math.max(5, Math.floor(volume * density));
+            if (levelIndex === 0) mineCount = 5;
+
+            cubeMeshes.forEach(cube => scene.remove(cube));
+            cubeMeshes = [];
+            boardData = [];
+            
+            gameOver = false;
+            firstClick = true;
+            flagsLeft = mineCount;
+            updateFlagsUI();
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            levelTitleElement.textContent = `Nivel ${levelIndex + 1}`;
+            
+            prevLevelBtn.disabled = (levelIndex === 0);
+
+            const maxSize = Math.max(boardDimensions.x, boardDimensions.y, boardDimensions.z);
+            camera.position.set(maxSize * 1.5, maxSize * 1.2, maxSize * 2);
+            controls.target.set(0, 0, 0);
+            controls.update();
+
+            const offsetX = (boardDimensions.x - 1) / 2;
+            const offsetY = (boardDimensions.y - 1) / 2;
+            const offsetZ = (boardDimensions.z - 1) / 2;
+
+            for (let x = 0; x < boardDimensions.x; x++) {
+                boardData[x] = [];
+                for (let y = 0; y < boardDimensions.y; y++) {
+                    boardData[x][y] = [];
+                    for (let z = 0; z < boardDimensions.z; z++) {
+                        boardData[x][y][z] = { isMine: false, isRevealed: false, isFlagged: false, adjacentMines: 0, x, y, z };
+                        const cube = new THREE.Mesh(cubeGeometry, materials.hidden.clone());
+                        cube.position.set((x - offsetX) * (1 + CUBE_SPACING), (y - offsetY) * (1 + CUBE_SPACING), (z - offsetZ) * (1 + CUBE_SPACING));
+                        cube.userData = { x, y, z };
+                        scene.add(cube);
+                        cubeMeshes.push(cube);
+                    }
+                }
+            }
+        }
+
+        function generateBoard(startX, startY, startZ) {
+            for (let x = 0; x < boardDimensions.x; x++) for (let y = 0; y < boardDimensions.y; y++) for (let z = 0; z < boardDimensions.z; z++) {
+                boardData[x][y][z].isMine = false;
+            }
+
+            let placedMines = 0;
+            while (placedMines < mineCount) {
+                const x = Math.floor(Math.random() * boardDimensions.x);
+                const y = Math.floor(Math.random() * boardDimensions.y);
+                const z = Math.floor(Math.random() * boardDimensions.z);
+                
+                const isStartArea = Math.abs(x - startX) <= 1 && Math.abs(y - startY) <= 1 && Math.abs(z - startZ) <= 1;
+
+                if (!isStartArea && !boardData[x][y][z].isMine) {
+                    boardData[x][y][z].isMine = true;
+                    placedMines++;
+                }
+            }
+
+            for (let x = 0; x < boardDimensions.x; x++) for (let y = 0; y < boardDimensions.y; y++) for (let z = 0; z < boardDimensions.z; z++) {
+                if (boardData[x][y][z].isMine) continue;
+                let count = 0;
+                for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+                    if (dx === 0 && dy === 0 && dz === 0) continue;
+                    const nx = x + dx, ny = y + dy, nz = z + dz;
+                    if (isValid(nx, ny, nz) && boardData[nx][ny][nz].isMine) count++;
+                }
+                boardData[x][y][z].adjacentMines = count;
+            }
+        }
+
+        function onPointerDown(event) {
+            if (gameOver) return;
+            interactionState.pointerDown = true;
+            interactionState.isDragging = false;
+            interactionState.downPosition.set(event.clientX, event.clientY);
+            interactionState.longPressTimer = setTimeout(() => {
+                handleInteraction(event.clientX, event.clientY, 'flag');
+                interactionState.longPressTimer = null;
+            }, LONG_PRESS_DURATION);
+        }
+
+        function onPointerMove(event) {
+            if (gameOver) return;
+            if (!interactionState.pointerDown) return;
+            const currentPosition = new THREE.Vector2(event.clientX, event.clientY);
+            if (interactionState.downPosition.distanceTo(currentPosition) > DRAG_THRESHOLD) {
+                interactionState.isDragging = true;
+                if (interactionState.longPressTimer) {
+                    clearTimeout(interactionState.longPressTimer);
+                    interactionState.longPressTimer = null;
+                }
+            }
+        }
+
+        function onPointerUp(event) {
+            if (gameOver) return;
+            if (interactionState.longPressTimer) {
+                clearTimeout(interactionState.longPressTimer);
+                interactionState.longPressTimer = null;
+                if (!interactionState.isDragging) {
+                    const action = (event.button === 2) ? 'flag' : 'reveal';
+                    handleInteraction(event.clientX, event.clientY, action);
+                }
+            }
+            interactionState.pointerDown = false;
+            interactionState.isDragging = false;
+        }
+
+        function handleInteraction(x, y, type) {
+            if (gameOver) return;
+            pointer.x = (x / window.innerWidth) * 2 - 1;
+            pointer.y = -(y / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(pointer, camera);
+            const intersects = raycaster.intersectObjects(cubeMeshes);
+            if (intersects.length > 0) {
+                const clickedCube = intersects[0].object;
+                const coords = clickedCube.userData;
+                const cellData = boardData[coords.x][coords.y][coords.z];
+                if (type === 'reveal') {
+                    if (cellData.isFlagged) return;
+                    if (firstClick) {
+                        generateBoard(coords.x, coords.y, coords.z);
+                        firstClick = false;
+                    }
+                    revealCube(coords.x, coords.y, coords.z, clickedCube);
+                } else if (type === 'flag') {
+                    if (cellData.isRevealed) return;
+                    cellData.isFlagged = !cellData.isFlagged;
+                    flagsLeft += cellData.isFlagged ? -1 : 1;
+                    clickedCube.material = cellData.isFlagged ? materials.flagged : materials.hidden;
+                    updateFlagsUI();
+                }
+                if (!gameOver) checkWinCondition();
+            }
+        }
+
+        function revealCube(x, y, z, mesh) {
+            if (!isValid(x, y, z)) return;
+            const cellData = boardData[x][y][z];
+            if (cellData.isRevealed || cellData.isFlagged) return;
+            cellData.isRevealed = true;
+            const cubeMesh = mesh || getCubeMesh(x, y, z);
+            if (cellData.isMine) {
+                triggerGameOver(false);
+                return;
+            }
+            if (cellData.adjacentMines > 0) {
+                cubeMesh.material = getNumberMaterial(cellData.adjacentMines);
+            } else {
+                cubeMesh.material = materials.revealed;
+                for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+                    if (dx === 0 && dy === 0 && dz === 0) continue;
+                    revealCube(x + dx, y + dy, z + dz);
+                }
+            }
+        }
+
+        function triggerGameOver(isWin) {
+            if (gameOver) return;
+            gameOver = true;
+            controls.autoRotate = true;
+
+            if (isWin) {
+                modalTitle.textContent = `¡Nivel ${currentLevelIndex + 1} Completado!`;
+                modalMessage.textContent = '¡Felicidades! Preparando el siguiente desafío...';
+                modalButton.textContent = 'Siguiente Nivel';
+                modalButton.onclick = () => {
+                    controls.autoRotate = false;
+                    currentLevelIndex++;
+                    startGame(currentLevelIndex);
+                };
+            } else {
+                cubeMeshes.forEach(cube => {
+                    const {x, y, z} = cube.userData;
+                    if (boardData[x][y][z].isMine) {
+                        cube.material = materials.mine;
+                    } else {
+                        cube.material = materials.revealed;
+                    }
+                });
+                modalTitle.textContent = '¡Has Perdido!';
+                modalMessage.textContent = `¡Boom! Inténtalo de nuevo.`;
+                modalButton.textContent = 'Reintentar Nivel';
+                modalButton.onclick = () => {
+                    controls.autoRotate = false;
+                    startGame(currentLevelIndex);
+};
+            }
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+        }
+        
+        function checkWinCondition() {
+            let unrevealedCount = 0;
+            for (let x = 0; x < boardDimensions.x; x++) {
+                for (let y = 0; y < boardDimensions.y; y++) {
+                    for (let z = 0; z < boardDimensions.z; z++) {
+                        if (!boardData[x][y][z].isRevealed) {
+                            unrevealedCount++;
+                        }
+                    }
+                }
+            }
+            
+            if (unrevealedCount === mineCount) {
+                triggerGameOver(true);
+            }
+        }
+
+        function isValid(x, y, z) { return x >= 0 && x < boardDimensions.x && y >= 0 && y < boardDimensions.y && z >= 0 && z < boardDimensions.z; }
+        
+        function getCubeMesh(x, y, z) { 
+            return cubeMeshes[x * boardDimensions.y * boardDimensions.z + y * boardDimensions.z + z]; 
+        }
+
+        function getNumberMaterial(number) {
+            if (!numberTextures[number]) {
+                const canvas = document.createElement('canvas');
+                const size = 128;
+                canvas.width = size; canvas.height = size;
+                const context = canvas.getContext('2d');
+                context.fillStyle = '#9ca3af';
+                context.fillRect(0, 0, size, size);
+                context.font = `bold ${size*0.75}px Inter, sans-serif`;
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.fillStyle = getNumberColor(number);
+                context.fillText(number.toString(), size/2, size/2);
+                const texture = new THREE.CanvasTexture(canvas);
+                numberTextures[number] = new THREE.MeshLambertMaterial({ map: texture });
+            }
+            return numberTextures[number];
+        }
+        function getNumberColor(number) {
+            const colors = ['#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#d97706', '#06b6d4', '#1f2937', '#4b5563'];
+            return colors[number - 1] || '#ffffff';
+        }
+        function updateFlagsUI() { 
+            flagsLeftElement.innerHTML = `🚩 ${mineCount}`; 
+        }
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
+�
