@@ -75,7 +75,7 @@
             </button>
             <div class="text-center">
                  <p id="objective" class="text-lg font-semibold">Objetivo: Despeja el campo</p>
-                 <p id="flags-left" class="text-gray-300">� 0</p>
+                 <p id="flags-left" class="text-gray-300">🚩 0</p>
             </div>
             <button id="next-level-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-bold p-2 rounded-lg leading-none" title="Nivel Siguiente">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -118,9 +118,9 @@
 
         // --- VARIABLES GLOBALES DEL JUEGO ---
         let currentLevelIndex = 0;
-        let boardDimensions, mineCount;
-        let boardData = [];
-        let cubeMeshes = [];
+        let boardDimensions, mineCount, totalCubes;
+        let boardData, cubeMeshes; // CORRECCIÓN: Ahora son Mapas
+        let validCoords = [];
         let flagsLeft;
         let gameOver = false;
         let firstClick = true;
@@ -193,35 +193,72 @@
             animate();
         }
 
-        function startGame(levelIndex) {
+        function createCuboid(levelIndex) {
             const sizeIncrease = Math.floor(levelIndex / 2);
             let baseSize = 4 + sizeIncrease;
             boardDimensions = { x: baseSize, y: baseSize, z: baseSize };
-
-            // CAMBIO: A partir del nivel 6 (índice 5), las formas dejan de ser cúbicas
             if (levelIndex >= 5) {
                 const modifier = (levelIndex - 5) % 3;
                 if (modifier === 0) boardDimensions.x += 2;
                 else if (modifier === 1) boardDimensions.y += 2;
                 else boardDimensions.z += 2;
             }
+            for (let x = 0; x < boardDimensions.x; x++) for (let y = 0; y < boardDimensions.y; y++) for (let z = 0; z < boardDimensions.z; z++) {
+                validCoords.push({x, y, z});
+            }
+        }
 
+        function createPyramid(levelIndex) {
+            const baseSize = 9;
+            const height = Math.floor(baseSize / 2) + 1;
+            boardDimensions = { x: baseSize, y: height, z: baseSize };
+            for (let y = 0; y < height; y++) {
+                const layerSize = baseSize - (y * 2);
+                const margin = y;
+                for (let x = margin; x < margin + layerSize; x++) for (let z = margin; z < margin + layerSize; z++) {
+                    validCoords.push({x, y, z});
+                }
+            }
+        }
+
+        function createDonut(levelIndex) {
+            const outerRadius = 5;
+            const innerRadius = 2.5;
+            const height = 3;
+            boardDimensions = { x: outerRadius * 2, y: height, z: outerRadius * 2 };
+            const centerX = outerRadius - 0.5;
+            const centerZ = outerRadius - 0.5;
+            for (let x = 0; x < boardDimensions.x; x++) for (let y = 0; y < boardDimensions.y; y++) for (let z = 0; z < boardDimensions.z; z++) {
+                const distSq = Math.pow(x - centerX, 2) + Math.pow(z - centerZ, 2);
+                if (distSq > innerRadius * innerRadius && distSq < outerRadius * outerRadius) {
+                    validCoords.push({x, y, z});
+                }
+            }
+        }
+
+        function startGame(levelIndex) {
+            if (cubeMeshes instanceof Map) {
+                for (const cube of cubeMeshes.values()) scene.remove(cube);
+            }
+            boardData = new Map();
+            cubeMeshes = new Map();
+            validCoords = [];
+
+            if (levelIndex === 5) createPyramid(levelIndex);
+            else if (levelIndex === 6) createDonut(levelIndex);
+            else createCuboid(levelIndex);
+            
+            totalCubes = validCoords.length;
             const density = 0.10 + (levelIndex * 0.0075);
-            const volume = boardDimensions.x * boardDimensions.y * boardDimensions.z;
-            mineCount = Math.max(5, Math.floor(volume * density));
+            mineCount = Math.max(5, Math.floor(totalCubes * density));
             if (levelIndex === 0) mineCount = 5;
 
-            cubeMeshes.forEach(cube => scene.remove(cube));
-            cubeMeshes = [];
-            boardData = [];
-            
             gameOver = false;
             firstClick = true;
             flagsLeft = mineCount;
             updateFlagsUI();
             modal.classList.add('opacity-0', 'pointer-events-none');
             levelTitleElement.textContent = `Nivel ${levelIndex + 1}`;
-            
             prevLevelBtn.disabled = (levelIndex === 0);
 
             const maxSize = Math.max(boardDimensions.x, boardDimensions.y, boardDimensions.z);
@@ -233,51 +270,47 @@
             const offsetY = (boardDimensions.y - 1) / 2;
             const offsetZ = (boardDimensions.z - 1) / 2;
 
-            for (let x = 0; x < boardDimensions.x; x++) {
-                boardData[x] = [];
-                for (let y = 0; y < boardDimensions.y; y++) {
-                    boardData[x][y] = [];
-                    for (let z = 0; z < boardDimensions.z; z++) {
-                        boardData[x][y][z] = { isMine: false, isRevealed: false, isFlagged: false, adjacentMines: 0, x, y, z };
-                        const cube = new THREE.Mesh(cubeGeometry, materials.hidden.clone());
-                        cube.position.set((x - offsetX) * (1 + CUBE_SPACING), (y - offsetY) * (1 + CUBE_SPACING), (z - offsetZ) * (1 + CUBE_SPACING));
-                        cube.userData = { x, y, z };
-                        scene.add(cube);
-                        cubeMeshes.push(cube);
-                    }
-                }
-            }
+            validCoords.forEach(({x, y, z}) => {
+                const key = `${x},${y},${z}`;
+                boardData.set(key, { isMine: false, isRevealed: false, isFlagged: false, adjacentMines: 0, x, y, z });
+                const cube = new THREE.Mesh(cubeGeometry, materials.hidden.clone());
+                cube.position.set((x - offsetX) * (1 + CUBE_SPACING), (y - offsetY) * (1 + CUBE_SPACING), (z - offsetZ) * (1 + CUBE_SPACING));
+                cube.userData = { x, y, z, key };
+                scene.add(cube);
+                cubeMeshes.set(key, cube);
+            });
         }
 
         function generateBoard(startX, startY, startZ) {
-            for (let x = 0; x < boardDimensions.x; x++) for (let y = 0; y < boardDimensions.y; y++) for (let z = 0; z < boardDimensions.z; z++) {
-                boardData[x][y][z].isMine = false;
-            }
-
-            let placedMines = 0;
-            while (placedMines < mineCount) {
-                const x = Math.floor(Math.random() * boardDimensions.x);
-                const y = Math.floor(Math.random() * boardDimensions.y);
-                const z = Math.floor(Math.random() * boardDimensions.z);
-                
+            validCoords.forEach(({x, y, z}) => { boardData.get(`${x},${y},${z}`).isMine = false; });
+            let minesToPlace = mineCount;
+            let availableCoords = [...validCoords];
+            const startAreaIndices = [];
+            for (let i = availableCoords.length - 1; i >= 0; i--) {
+                const {x, y, z} = availableCoords[i];
                 const isStartArea = Math.abs(x - startX) <= 1 && Math.abs(y - startY) <= 1 && Math.abs(z - startZ) <= 1;
-
-                if (!isStartArea && !boardData[x][y][z].isMine) {
-                    boardData[x][y][z].isMine = true;
-                    placedMines++;
-                }
+                if (isStartArea) startAreaIndices.push(i);
             }
-
-            for (let x = 0; x < boardDimensions.x; x++) for (let y = 0; y < boardDimensions.y; y++) for (let z = 0; z < boardDimensions.z; z++) {
-                if (boardData[x][y][z].isMine) continue;
+            startAreaIndices.sort((a,b) => b-a).forEach(index => availableCoords.splice(index, 1));
+            while (minesToPlace > 0 && availableCoords.length > 0) {
+                const randomIndex = Math.floor(Math.random() * availableCoords.length);
+                const {x, y, z} = availableCoords[randomIndex];
+                boardData.get(`${x},${y},${z}`).isMine = true;
+                availableCoords.splice(randomIndex, 1);
+                minesToPlace--;
+            }
+            validCoords.forEach(({x, y, z}) => {
+                const cell = boardData.get(`${x},${y},${z}`);
+                if (cell.isMine) return;
                 let count = 0;
                 for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
                     if (dx === 0 && dy === 0 && dz === 0) continue;
                     const nx = x + dx, ny = y + dy, nz = z + dz;
-                    if (isValid(nx, ny, nz) && boardData[nx][ny][nz].isMine) count++;
+                    const neighbor = boardData.get(`${nx},${ny},${nz}`);
+                    if (neighbor && neighbor.isMine) count++;
                 }
-                boardData[x][y][z].adjacentMines = count;
-            }
+                cell.adjacentMines = count;
+            });
         }
 
         function onPointerDown(event) {
@@ -323,35 +356,36 @@
             pointer.x = (x / window.innerWidth) * 2 - 1;
             pointer.y = -(y / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(pointer, camera);
-            const intersects = raycaster.intersectObjects(cubeMeshes);
+            const intersects = raycaster.intersectObjects(Array.from(cubeMeshes.values()));
             if (intersects.length > 0) {
                 const clickedCube = intersects[0].object;
-                const coords = clickedCube.userData;
-                const cellData = boardData[coords.x][coords.y][coords.z];
+                const { key, x, y, z } = clickedCube.userData;
+                const cellData = boardData.get(key);
+                if (!cellData) return;
+
                 if (type === 'reveal') {
                     if (cellData.isFlagged) return;
                     if (firstClick) {
-                        generateBoard(coords.x, coords.y, coords.z);
+                        generateBoard(x, y, z);
                         firstClick = false;
                     }
-                    revealCube(coords.x, coords.y, coords.z, clickedCube);
+                    revealCube(x, y, z, clickedCube);
                 } else if (type === 'flag') {
                     if (cellData.isRevealed) return;
                     cellData.isFlagged = !cellData.isFlagged;
-                    flagsLeft += cellData.isFlagged ? -1 : 1;
                     clickedCube.material = cellData.isFlagged ? materials.flagged : materials.hidden;
-                    updateFlagsUI();
                 }
                 if (!gameOver) checkWinCondition();
             }
         }
 
-        function revealCube(x, y, z, mesh) {
-            if (!isValid(x, y, z)) return;
-            const cellData = boardData[x][y][z];
-            if (cellData.isRevealed || cellData.isFlagged) return;
+        function revealCube(x, y, z) {
+            const key = `${x},${y},${z}`;
+            const cellData = boardData.get(key);
+            if (!cellData || cellData.isRevealed || cellData.isFlagged) return;
+            
             cellData.isRevealed = true;
-            const cubeMesh = mesh || getCubeMesh(x, y, z);
+            const cubeMesh = cubeMeshes.get(key);
             if (cellData.isMine) {
                 triggerGameOver(false);
                 return;
@@ -382,9 +416,10 @@
                     startGame(currentLevelIndex);
                 };
             } else {
-                cubeMeshes.forEach(cube => {
-                    const {x, y, z} = cube.userData;
-                    if (boardData[x][y][z].isMine) {
+                validCoords.forEach(({x, y, z}) => {
+                    const key = `${x},${y},${z}`;
+                    const cube = cubeMeshes.get(key);
+                    if (boardData.get(key).isMine) {
                         cube.material = materials.mine;
                     } else {
                         cube.material = materials.revealed;
@@ -396,32 +431,19 @@
                 modalButton.onclick = () => {
                     controls.autoRotate = false;
                     startGame(currentLevelIndex);
-};
+                };
             }
             modal.classList.remove('opacity-0', 'pointer-events-none');
         }
         
         function checkWinCondition() {
-            let unrevealedCount = 0;
-            for (let x = 0; x < boardDimensions.x; x++) {
-                for (let y = 0; y < boardDimensions.y; y++) {
-                    for (let z = 0; z < boardDimensions.z; z++) {
-                        if (!boardData[x][y][z].isRevealed) {
-                            unrevealedCount++;
-                        }
-                    }
-                }
+            let revealedCount = 0;
+            for (const cell of boardData.values()) {
+                if (cell.isRevealed) revealedCount++;
             }
-            
-            if (unrevealedCount === mineCount) {
+            if (totalCubes - revealedCount === mineCount) {
                 triggerGameOver(true);
             }
-        }
-
-        function isValid(x, y, z) { return x >= 0 && x < boardDimensions.x && y >= 0 && y < boardDimensions.y && z >= 0 && z < boardDimensions.z; }
-        
-        function getCubeMesh(x, y, z) { 
-            return cubeMeshes[x * boardDimensions.y * boardDimensions.z + y * boardDimensions.z + z]; 
         }
 
         function getNumberMaterial(number) {
@@ -465,4 +487,3 @@
     </script>
 </body>
 </html>
-�
